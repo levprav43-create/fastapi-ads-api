@@ -69,10 +69,13 @@ async def delete_advertisement(advertisement_id: int, db: AsyncSession = Depends
 
 @app.get("/advertisement", response_model=list[AdvertisementResponse])
 async def search_advertisements(
-    title: Optional[str] = Query(None),
-    author: Optional[str] = Query(None),
-    min_price: Optional[float] = Query(None),
-    max_price: Optional[float] = Query(None),
+    title: Optional[str] = Query(None, description="Поиск по заголовку"),
+    description: Optional[str] = Query(None, description="Поиск по описанию"),
+    author: Optional[str] = Query(None, description="Поиск по автору"),
+    min_price: Optional[float] = Query(None, description="Минимальная цена"),
+    max_price: Optional[float] = Query(None, description="Максимальная цена"),
+    min_date: Optional[str] = Query(None, description="Минимальная дата создания (YYYY-MM-DD)"),
+    max_date: Optional[str] = Query(None, description="Максимальная дата создания (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db)
 ):
     query = select(Advertisement)
@@ -80,12 +83,20 @@ async def search_advertisements(
     
     if title:
         conditions.append(Advertisement.title.ilike(f"%{title}%"))
+    if description:
+        conditions.append(Advertisement.description.ilike(f"%{description}%"))
     if author:
         conditions.append(Advertisement.author.ilike(f"%{author}%"))
     if min_price is not None:
         conditions.append(Advertisement.price >= min_price)
     if max_price is not None:
         conditions.append(Advertisement.price <= max_price)
+    if min_date:
+        min_dt = datetime.fromisoformat(min_date)
+        conditions.append(Advertisement.created_at >= min_dt)
+    if max_date:
+        max_dt = datetime.fromisoformat(max_date)
+        conditions.append(Advertisement.created_at <= max_dt)
     
     if conditions:
         query = query.where(and_(*conditions))

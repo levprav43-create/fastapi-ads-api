@@ -35,22 +35,12 @@ uvicorn app.main:app --reload
 ## API Эндпоинты
 
 ### POST /advertisement - создать объявление
-{
-  "title": "Продам ноутбук",
-  "description": "Lenovo E14 G6",
-  "price": 50000,
-  "author": "Лев"
-}
 
 ### GET /advertisement/{id} - получить объявление по ID
 
 ### PATCH /advertisement/{id} - обновить объявление
-{
-  "title": "Новый заголовок",
-  "price": 55000
-}
 
 ### DELETE /advertisement/{id} - удалить объявление
 
 ### GET /advertisement - поиск по полям
-Параметры: ?title=ноутбук&author=Лев&min_price=10000&max_price=100000
+Параметры: ?title=ноутбук&description=RAM&author=Лев&min_price=10000&max_price=100000&min_date=2026-07-01&max_date=2026-07-31
