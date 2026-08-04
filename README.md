@@ -1,46 +1,22 @@
-# FastAPI REST API - Сайт объявлений
+# FastAPI Ads API (Part 2)
 
-REST API для сайта объявлений на FastAPI с PostgreSQL в Docker.
+Проект для курса Нетология (Python-разработчик).
 
-## Поля объявления
+## Реализовано
+- JWT-авторизация (POST /login, токен на 48 часов, 401 при неверных данных)
+- CRUD пользователей (группы: user / admin)
+- Ролевая модель доступа (403 при недостатке прав)
+- Связь User -> Advertisement (CASCADE)
+- CRUD объявлений + поиск по полям
 
-- **id** - уникальный идентификатор (автогенерация)
-- **title** - заголовок (обязательное)
-- **description** - описание
-- **price** - цена (обязательное, > 0)
-- **author** - автор (обязательное)
-- **created_at** - дата создания (проставляется автоматически)
+## Технологии
+FastAPI, SQLAlchemy 2.0 (async), PostgreSQL 16 (Docker), bcrypt, python-jose, Python 3.14
 
-## Установка и запуск
+## Запуск
+1. docker compose up -d
+2. pip install -r requirements.txt
+3. uvicorn app.main:app --reload
 
-### 1. Запуск базы данных:
-docker compose up -d
+Документация: http://127.0.0.1:8000/docs
 
-### 2. Установка зависимостей:
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-### 3. Запуск приложения:
-uvicorn app.main:app --reload
-
-Приложение запустится на http://localhost:8000
-
-## API Документация
-
-После запуска открой в браузере:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-## API Эндпоинты
-
-### POST /advertisement - создать объявление
-
-### GET /advertisement/{id} - получить объявление по ID
-
-### PATCH /advertisement/{id} - обновить объявление
-
-### DELETE /advertisement/{id} - удалить объявление
-
-### GET /advertisement - поиск по полям
-Параметры: ?title=ноутбук&description=RAM&author=Лев&min_price=10000&max_price=100000&min_date=2026-07-01&max_date=2026-07-31
+Автор: Лев, студент Нетологии

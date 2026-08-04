@@ -1,105 +1,162 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from typing import Optional, List
+from decimal import Decimal
+from datetime import datetime
+from fastapi import FastAPI, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
-from typing import Optional
-from datetime import datetime
+from contextlib import asynccontextmanager
 
-from app.database import engine, get_db
-from app.models import Base, Advertisement
-from app.schemas import AdvertisementCreate, AdvertisementUpdate, AdvertisementResponse
+from app.database import get_session, init_db
+from app.models import Advertisement, User
+from app.schemas import (
+    AdvertisementCreate, AdvertisementUpdate, AdvertisementResponse,
+    UserCreate, UserUpdate, UserResponse, LoginRequest, TokenResponse
+)
+from app.auth import (
+    verify_password, get_password_hash, create_access_token, 
+    get_current_user, require_auth
+)
 
-app = FastAPI(title="FastAPI Ads API", version="1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
 
-@app.on_event("startup")
-async def startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+app = FastAPI(title="Ads API Part 2", lifespan=lifespan)
 
-@app.post("/advertisement", response_model=AdvertisementResponse, status_code=201)
-async def create_advertisement(ad: AdvertisementCreate, db: AsyncSession = Depends(get_db)):
-    db_ad = Advertisement(
-        title=ad.title,
-        description=ad.description,
-        price=ad.price,
-        author=ad.author,
-        created_at=datetime.utcnow()
-    )
-    db.add(db_ad)
-    await db.commit()
-    await db.refresh(db_ad)
-    return db_ad
+# ==================== LOGIN ====================
+@app.post("/login", response_model=TokenResponse, tags=["Auth"])
+async def login(data: LoginRequest, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(User).where(User.username == data.username))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    return {"access_token": create_access_token({"sub": user.username}), "token_type": "bearer"}
 
-@app.get("/advertisement/{advertisement_id}", response_model=AdvertisementResponse)
-async def get_advertisement(advertisement_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Advertisement).where(Advertisement.id == advertisement_id))
+# ==================== USERS ====================
+@app.post("/user", response_model=UserResponse, status_code=201, tags=["Users"])
+async def create_user(data: UserCreate, session: AsyncSession = Depends(get_session)):
+    # Доступно всем (без токена)
+    existing = await session.execute(select(User).where(User.username == data.username))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Юзер уже существует")
+    if data.group not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="Группа должна быть user или admin")
+        
+    new_user = User(username=data.username, hashed_password=get_password_hash(data.password), group=data.group)
+    session.add(new_user)
+    await session.commit()
+    await session.refresh(new_user)
+    return new_user
+
+@app.get("/user/{user_id}", response_model=UserResponse, tags=["Users"])
+async def get_user(user_id: int, session: AsyncSession = Depends(get_session)):
+    # Доступно всем (без токена)
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.patch("/user/{user_id}", response_model=UserResponse, tags=["Users"])
+async def update_user(user_id: int, data: UserUpdate, current_user: User = Depends(require_auth), session: AsyncSession = Depends(get_session)):
+    # Право: только себя или админ
+    if current_user.id != user_id and current_user.group != "admin":
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+        
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    
+    update_data = data.model_dump(exclude_unset=True)
+    if "username" in update_data: user.username = update_data["username"]
+    if "password" in update_data: user.hashed_password = get_password_hash(update_data["password"])
+    if "group" in update_data:
+        if current_user.group != "admin": raise HTTPException(status_code=403, detail="Только админ может менять группу")
+        user.group = update_data["group"]
+        
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+@app.delete("/user/{user_id}", status_code=204, tags=["Users"])
+async def delete_user(user_id: int, current_user: User = Depends(require_auth), session: AsyncSession = Depends(get_session)):
+    # Право: только себя или админ
+    if current_user.id != user_id and current_user.group != "admin":
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+        
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    
+    await session.delete(user)
+    await session.commit()
+    return JSONResponse(status_code=204, content=None)
+
+# ==================== ADS ====================
+@app.post("/advertisement", response_model=AdvertisementResponse, status_code=201, tags=["Ads"])
+async def create_ad(data: AdvertisementCreate, current_user: User = Depends(require_auth), session: AsyncSession = Depends(get_session)):
+    # Право: только авторизованные
+    new_ad = Advertisement(title=data.title, description=data.description, author=data.author, price=data.price, user_id=current_user.id)
+    session.add(new_ad)
+    await session.commit()
+    await session.refresh(new_ad)
+    return new_ad
+
+@app.get("/advertisement/{ad_id}", response_model=AdvertisementResponse, tags=["Ads"])
+async def get_ad(ad_id: int, session: AsyncSession = Depends(get_session)):
+    # Доступно всем
+    result = await session.execute(select(Advertisement).where(Advertisement.id == ad_id))
     ad = result.scalar_one_or_none()
-    if not ad:
-        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if not ad: raise HTTPException(status_code=404, detail="Ad not found")
     return ad
 
-@app.patch("/advertisement/{advertisement_id}", response_model=AdvertisementResponse)
-async def update_advertisement(
-    advertisement_id: int,
-    ad_update: AdvertisementUpdate,
-    db: AsyncSession = Depends(get_db)
+@app.get("/advertisement", response_model=List[AdvertisementResponse], tags=["Ads"])
+async def search_ads(
+    title: Optional[str] = None, description: Optional[str] = None, author: Optional[str] = None,
+    min_price: Optional[Decimal] = None, max_price: Optional[Decimal] = None,
+    min_date: Optional[datetime] = None, max_date: Optional[datetime] = None,
+    session: AsyncSession = Depends(get_session)
 ):
-    result = await db.execute(select(Advertisement).where(Advertisement.id == advertisement_id))
-    ad = result.scalar_one_or_none()
-    if not ad:
-        raise HTTPException(status_code=404, detail="Объявление не найдено")
-    
-    update_data = ad_update.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(ad, field, value)
-    
-    await db.commit()
-    await db.refresh(ad)
-    return ad
-
-@app.delete("/advertisement/{advertisement_id}")
-async def delete_advertisement(advertisement_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Advertisement).where(Advertisement.id == advertisement_id))
-    ad = result.scalar_one_or_none()
-    if not ad:
-        raise HTTPException(status_code=404, detail="Объявление не найдено")
-    
-    await db.delete(ad)
-    await db.commit()
-    return {"message": f"Объявление {advertisement_id} удалено"}
-
-@app.get("/advertisement", response_model=list[AdvertisementResponse])
-async def search_advertisements(
-    title: Optional[str] = Query(None, description="Поиск по заголовку"),
-    description: Optional[str] = Query(None, description="Поиск по описанию"),
-    author: Optional[str] = Query(None, description="Поиск по автору"),
-    min_price: Optional[float] = Query(None, description="Минимальная цена"),
-    max_price: Optional[float] = Query(None, description="Максимальная цена"),
-    min_date: Optional[str] = Query(None, description="Минимальная дата создания (YYYY-MM-DD)"),
-    max_date: Optional[str] = Query(None, description="Максимальная дата создания (YYYY-MM-DD)"),
-    db: AsyncSession = Depends(get_db)
-):
+    # Доступно всем
     query = select(Advertisement)
     conditions = []
+    if title: conditions.append(Advertisement.title.ilike(f"%{title}%"))
+    if description: conditions.append(Advertisement.description.ilike(f"%{description}%"))
+    if author: conditions.append(Advertisement.author.ilike(f"%{author}%"))
+    if min_price: conditions.append(Advertisement.price >= min_price)
+    if max_price: conditions.append(Advertisement.price <= max_price)
+    if min_date: conditions.append(Advertisement.created_at >= min_date)
+    if max_date: conditions.append(Advertisement.created_at <= max_date)
+    if conditions: query = query.where(and_(*conditions))
     
-    if title:
-        conditions.append(Advertisement.title.ilike(f"%{title}%"))
-    if description:
-        conditions.append(Advertisement.description.ilike(f"%{description}%"))
-    if author:
-        conditions.append(Advertisement.author.ilike(f"%{author}%"))
-    if min_price is not None:
-        conditions.append(Advertisement.price >= min_price)
-    if max_price is not None:
-        conditions.append(Advertisement.price <= max_price)
-    if min_date:
-        min_dt = datetime.fromisoformat(min_date)
-        conditions.append(Advertisement.created_at >= min_dt)
-    if max_date:
-        max_dt = datetime.fromisoformat(max_date)
-        conditions.append(Advertisement.created_at <= max_dt)
-    
-    if conditions:
-        query = query.where(and_(*conditions))
-    
-    result = await db.execute(query)
+    result = await session.execute(query)
     return result.scalars().all()
+
+@app.patch("/advertisement/{ad_id}", response_model=AdvertisementResponse, tags=["Ads"])
+async def update_ad(ad_id: int, data: AdvertisementUpdate, current_user: User = Depends(require_auth), session: AsyncSession = Depends(get_session)):
+    # Право: свое или админ
+    result = await session.execute(select(Advertisement).where(Advertisement.id == ad_id))
+    ad = result.scalar_one_or_none()
+    if not ad: raise HTTPException(status_code=404, detail="Ad not found")
+    if current_user.group != "admin" and ad.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+        
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(ad, key, value)
+    await session.commit()
+    await session.refresh(ad)
+    return ad
+
+@app.delete("/advertisement/{ad_id}", status_code=204, tags=["Ads"])
+async def delete_ad(ad_id: int, current_user: User = Depends(require_auth), session: AsyncSession = Depends(get_session)):
+    # Право: свое или админ
+    result = await session.execute(select(Advertisement).where(Advertisement.id == ad_id))
+    ad = result.scalar_one_or_none()
+    if not ad: raise HTTPException(status_code=404, detail="Ad not found")
+    if current_user.group != "admin" and ad.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+        
+    await session.delete(ad)
+    await session.commit()
+    return JSONResponse(status_code=204, content=None)

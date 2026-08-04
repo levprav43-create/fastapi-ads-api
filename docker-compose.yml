@@ -1,19 +1,18 @@
+version: '3.8'
+
 services:
   db:
     image: postgres:16
+    container_name: fastapi-ads-api-db
+    restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: fastapi_ads
+      POSTGRES_DB: ads_db
+      POSTGRES_USER: ads_user
+      POSTGRES_PASSWORD: ads_password
     ports:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
 volumes:
   pgdata:
